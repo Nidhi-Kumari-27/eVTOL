@@ -1,0 +1,12 @@
+# Ignore CARLA-Project folder
+CARLA_0.9.15/
+testing/
+
+# Ignore VS Code files
+.vscode/
+*.code-workspace
+
+# Ignore system and log files
+*.log
+.DS_Store
+Thumbs.db
