@@ -26,7 +26,14 @@ if vehicle is None:
 print(f"Monitoring vehicle ID={vehicle.id} ({vehicle.type_id})")
 
 # 3. CSV LOGGING SETUP
-csv_filename = "violations.csv"
+script_dir = os.path.dirname(os.path.abspath(__file__))  # directory of test_violation.py
+output_dir = os.path.join(script_dir, "..", "output")    # go up one level and into 'output'
+output_dir = os.path.abspath(output_dir)                 # normalize path
+
+os.makedirs(output_dir, exist_ok=True)
+
+csv_filename = os.path.join(output_dir, "violations.csv")
+
 if not os.path.exists(csv_filename):
     with open(csv_filename, mode="w", newline="") as f:
         writer = csv.writer(f)
@@ -98,10 +105,10 @@ try:
                     if dot > 0 and speed > 1.0:
                         violation_detected = True
                         violation_type = "StopWaypointPassed"
-                        distance_past = dot  # how far “beyond” the stop line
+                        distance_past = dot  # how far "beyond" the stop line
 
                 else:
-                    # No stop waypoint available: fall back to trigger‐volume check
+                    # No stop waypoint available: fall back to trigger-volume check
                     inside_trigger = is_inside_trigger_box(vehicle, tl)
                     if inside_trigger and speed > 1.0:
                         violation_detected = True
@@ -109,7 +116,7 @@ try:
                         # We can record distance to TL center as a rough proxy
                         distance_past = veh_loc.distance(tl.get_transform().location)
 
-            # 5.3. Log if first time this red‐state violation is seen
+            # 5.3. Log if first time this red-state violation is seen
             if violation_detected and not violation_logged:
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 print(f"Red light violation at {timestamp} | "
@@ -140,7 +147,7 @@ try:
             # Vehicle not currently influenced by any TL
             violation_logged = False
 
-        # 5.4. Small delay → 10 Hz polling
+        # 5.4. Small delay -> 10 Hz polling
         time.sleep(0.1)
 
 except KeyboardInterrupt:
