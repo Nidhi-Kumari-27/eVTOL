@@ -10,20 +10,38 @@ client = carla.Client("localhost", 2000)
 client.set_timeout(10.0)
 world = client.get_world() 
 
-# 2. FIND THE VEHICLE TO MONITOR
+# 2. WAIT AND FIND THE VEHICLE TO MONITOR
+print("Waiting up to 60 seconds for a vehicle to spawn...")
+
 vehicle = None
-for actor in world.get_actors().filter("vehicle.*"):
-    if actor.attributes.get("role_name", "") == "hero":
-        vehicle = actor
+start_time = time.time()
+timeout_seconds = 60
+
+while time.time() - start_time < timeout_seconds:
+    for actor in world.get_actors().filter("vehicle.*"):
+        if actor.attributes.get("role_name", "") == "hero":
+            vehicle = actor
+            break
+    if vehicle is not None:
         break
+    time.sleep(1)  # check every second
 
 if vehicle is None:
-    vehicles = world.get_actors().filter("vehicle.*")
-    if not vehicles:
-        raise RuntimeError("No vehicle found. Please spawn one first.")
-    vehicle = vehicles[0]
+    # If no 'hero' vehicle is found, fall back to any vehicle
+    print("No vehicle with role_name='hero' found. Waiting for any vehicle...")
+    start_time = time.time()
+    while time.time() - start_time < timeout_seconds:
+        vehicles = world.get_actors().filter("vehicle.*")
+        if vehicles:
+            vehicle = vehicles[0]
+            break
+        time.sleep(1)
+
+if vehicle is None:
+    raise RuntimeError("No vehicle found after 60 seconds. Please start a simulation.")
 
 print(f"Monitoring vehicle ID={vehicle.id} ({vehicle.type_id})")
+
 
 # 3. CSV LOGGING SETUP
 script_dir = os.path.dirname(os.path.abspath(__file__))  # directory of test_violation.py
