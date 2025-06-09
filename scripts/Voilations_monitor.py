@@ -7,7 +7,8 @@ from collections import defaultdict
 from datetime import datetime
 
 ZONE_RADIUS = 2.0
-OUTPUT_DIR = '.'
+OUTPUT_DIR = 'output'
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 def euclidean_distance(loc1, loc2):
