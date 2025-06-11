@@ -4,58 +4,22 @@ import csv
 import os
 import math
 import sys
-import io
 from collections import defaultdict
 from datetime import datetime
-from cryptography.fernet import Fernet
- 
+
 # --- Configuration Constants ---
 ZONE_RADIUS = 2.0
-ENCRYPTION_KEY = b'27VNJatctBfMT4CEYRmiB5F_IzRa0akQ0cDHSBIRtz4='
-fernet = Fernet(ENCRYPTION_KEY)
- 
+
 def find_violation_detection_folder():
-    
-    user_profile = os.environ.get("USERPROFILE", "C:\\Users\\Default")
- 
-    # 1) locate OneDrive root
-    one_drive = None
-    for entry in os.listdir(user_profile):
-        if entry.startswith("OneDrive"):
-            candidate = os.path.join(user_profile, entry)
-            if os.path.isdir(candidate):
-                one_drive = candidate
-                break
-    if not one_drive:
-        return None
- 
-    # 2) find a folder ending with 'Benchmarks' immediately under OneDrive
-    benchmarks_root = None
-    for name in os.listdir(one_drive):
-        if name.lower().endswith("benchmarks"):
-            candidate = os.path.join(one_drive, name)
-            if os.path.isdir(candidate):
-                benchmarks_root = candidate
-                break
-    if not benchmarks_root:
-        return None
- 
-    # 3) ensure violation_detection exists
-    vd = os.path.join(benchmarks_root, "violation_detection")
-    os.makedirs(vd, exist_ok=True)
-    return vd
- 
+    """
+    Cross-platform: Creates an 'output/violation_detection' folder under the current working directory.
+    """
+    base_dir = os.path.join(os.getcwd(), "output", "violation_detection")
+    os.makedirs(base_dir, exist_ok=True)
+    return base_dir
+
 VIOLATION_DIR = find_violation_detection_folder()
-if not VIOLATION_DIR:
-    print("❌ Could not locate or create 'violation_detection' under your OneDrive Benchmarks folder.")
-    sys.exit(1)
- 
-def encrypt_csv_data(data: str) -> bytes:
-    return fernet.encrypt(data.encode("utf-8"))
- 
-def decrypt_csv_data(data: bytes) -> str:
-    return fernet.decrypt(data).decode("utf-8")
- 
+
 def update_master_csv(team_name, lane, collision, redlight):
     master_path = os.path.join(VIOLATION_DIR, "master_violation.csv")
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -70,15 +34,10 @@ def update_master_csv(team_name, lane, collision, redlight):
 
     rows = []
     if os.path.exists(master_path):
-        try:
-            encrypted = open(master_path, "rb").read()
-            plaintext = decrypt_csv_data(encrypted)
-            reader = csv.DictReader(plaintext.splitlines())
+        with open(master_path, "r", newline="") as f:
+            reader = csv.DictReader(f)
             if set(reader.fieldnames or []) == set(fieldnames):
-                for row in reader:
-                    rows.append(row)
-        except Exception:
-            rows = []
+                rows = list(reader)
 
     updated = False
     current_total = lane + collision + redlight
@@ -112,26 +71,26 @@ def update_master_csv(team_name, lane, collision, redlight):
             "lowest_total": str(current_total)
         })
 
-    buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
-    writer.writeheader()
-    writer.writerows(rows)
-    with open(master_path, "wb") as f:
-        f.write(encrypt_csv_data(buffer.getvalue()))
+    with open(master_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
- 
 class CollisionMonitor:
     def __init__(self, vehicle, world):
-        self.vehicle = vehicle; self.world = world
-        self.sensor = None; self.zones = []
-        self.static_count = 0; self.dynamic_count = 0
- 
+        self.vehicle = vehicle
+        self.world = world
+        self.sensor = None
+        self.zones = []
+        self.static_count = 0
+        self.dynamic_count = 0
+
     def attach_sensor(self):
         bp = self.world.get_blueprint_library().find("sensor.other.collision")
         self.sensor = self.world.spawn_actor(bp, carla.Transform(), attach_to=self.vehicle)
         self.sensor.listen(self._on_collision)
         print("📡 Collision sensor attached.")
- 
+
     def _on_collision(self, event):
         loc = self.vehicle.get_location()
         self._cleanup_zones(loc)
@@ -145,70 +104,72 @@ class CollisionMonitor:
             self.static_count += 1
             print(f"💥 Static collision with {other.type_id}")
         self.zones.append(loc)
- 
+
     def _cleanup_zones(self, current_loc):
-        self.zones = [
-            z for z in self.zones
-            if math.hypot(current_loc.x - z.x, current_loc.y - z.y) < ZONE_RADIUS
-        ]
- 
+        self.zones = [z for z in self.zones if math.hypot(current_loc.x - z.x, current_loc.y - z.y) < ZONE_RADIUS]
+
     def destroy(self):
         if self.sensor:
             self.sensor.stop()
             self.sensor.destroy()
- 
+
 class LaneMonitor:
     def __init__(self, vehicle, world):
-        self.vehicle = vehicle; self.world = world
-        self.sensor = None; self.last_turn_time = 0
+        self.vehicle = vehicle
+        self.world = world
+        self.sensor = None
+        self.last_turn_time = 0
         self.violations = defaultdict(int)
- 
+
     def attach_sensor(self):
         bp = self.world.get_blueprint_library().find("sensor.other.lane_invasion")
         self.sensor = self.world.spawn_actor(bp, carla.Transform(), attach_to=self.vehicle)
         self.sensor.listen(self._on_lane_violation)
         print("📡 Lane Detection sensor attached.")
- 
+
     def _on_lane_violation(self, event):
         markings = [m.type for m in event.crossed_lane_markings]
         now = time.time()
         if now - self.last_turn_time < 5.0:
             return
         if carla.LaneMarkingType.SolidSolid in markings:
-            self.violations["illegal_double_solid_cross"] += 1; print("ILLEGAL: Crossed DOUBLE SOLID line!")
+            self.violations["illegal_double_solid_cross"] += 1
+            print("ILLEGAL: Crossed DOUBLE SOLID line!")
         elif carla.LaneMarkingType.Solid in markings:
-            self.violations["illegal_solid_cross"] += 1; print("ILLEGAL: Crossed SOLID line!")
+            self.violations["illegal_solid_cross"] += 1
+            print("ILLEGAL: Crossed SOLID line!")
         elif carla.LaneMarkingType.Broken in markings:
-            self.violations["unjustified_dashed_cross"] += 1; print("UNJUSTIFIED: Crossed dashed line!")
- 
+            self.violations["unjustified_dashed_cross"] += 1
+            print("UNJUSTIFIED: Crossed dashed line!")
+
     def update_turn_status(self):
         loc = self.vehicle.get_transform().location
         wp = self.world.get_map().get_waypoint(loc)
         if wp.is_junction:
             self.last_turn_time = time.time()
- 
+
     def destroy(self):
         if self.sensor:
             self.sensor.stop()
             self.sensor.destroy()
- 
+
 class RedLightMonitor:
     def __init__(self, vehicle):
         self.vehicle = vehicle
         self.violation_logged = False
         self.violations = defaultdict(int)
- 
+
     def get_speed(self):
         v = self.vehicle.get_velocity()
         return math.sqrt(v.x**2 + v.y**2 + v.z**2)
- 
+
     def get_stop_data(self, tl):
         wps = tl.get_stop_waypoints()
         if wps:
             wp = wps[0]
             return wp.transform.location, wp.transform.rotation.get_forward_vector()
         return None, None
- 
+
     def is_inside_trigger_box(self, tl):
         trg = tl.trigger_volume
         world_loc = tl.get_transform().transform(trg.location)
@@ -218,18 +179,19 @@ class RedLightMonitor:
             abs(world_loc.y - veh_loc.y) <= trg.extent.y and
             abs(world_loc.z - veh_loc.z) <= trg.extent.z
         )
- 
+
     def tick(self):
         tl = self.vehicle.get_traffic_light()
         if tl is None or tl.get_state() != carla.TrafficLightState.Red:
             self.violation_logged = False
             return
- 
+
         speed = self.get_speed()
         veh_loc = self.vehicle.get_location()
         stop_loc, stop_fwd = self.get_stop_data(tl)
- 
-        violation = None; distance = 0.0
+
+        violation = None
+        distance = 0.0
         if stop_loc:
             rel = veh_loc - stop_loc
             dot = rel.x*stop_fwd.x + rel.y*stop_fwd.y + rel.z*stop_fwd.z
@@ -238,26 +200,29 @@ class RedLightMonitor:
         elif self.is_inside_trigger_box(tl) and speed > 1.0:
             violation = "TriggerVolume"
             distance = veh_loc.distance(tl.get_transform().location)
- 
+
         if violation and not self.violation_logged:
             self.violations[violation] += 1
             print(f"🚦 RED LIGHT VIOLATION: {violation} | Distance: {distance:.2f}")
             self.violation_logged = True
         elif not violation:
             self.violation_logged = False
- 
+
 class TeamMonitor:
     def __init__(self, client, team_name):
-        self.client = client; self.world = client.get_world()
+        self.client = client
+        self.world = client.get_world()
         self.team_name = team_name.lower().replace(" ", "_")
         self.vehicle = None
- 
+
         os.makedirs(VIOLATION_DIR, exist_ok=True)
         self.team_csv = os.path.join(VIOLATION_DIR, f"{self.team_name}.csv")
         self._init_team_csv()
- 
-        self.lane = None; self.collision = None; self.redlight = None
- 
+
+        self.lane = None
+        self.collision = None
+        self.redlight = None
+
     def _init_team_csv(self):
         if not os.path.exists(self.team_csv):
             with open(self.team_csv, "w", newline="") as f:
@@ -267,7 +232,7 @@ class TeamMonitor:
                     "total_lane_violations","static_collisions","dynamic_collisions","total_collisions",
                     "redlight_StopWaypointPassed","redlight_TriggerVolume","total_redlight_violations","timestamp"
                 ])
- 
+
     def find_vehicle(self):
         existing = {v.id for v in self.world.get_actors().filter("vehicle.*")}
         print("⏳ Waiting for ego vehicle...")
@@ -278,15 +243,16 @@ class TeamMonitor:
                     print(f"🚗 Detected ego: {v.type_id} (ID {v.id})")
                     return
             time.sleep(0.5)
- 
+
     def run(self):
         self.find_vehicle()
         self.lane = LaneMonitor(self.vehicle, self.world)
         self.collision = CollisionMonitor(self.vehicle, self.world)
         self.redlight = RedLightMonitor(self.vehicle)
- 
-        self.lane.attach_sensor(); self.collision.attach_sensor()
- 
+
+        self.lane.attach_sensor()
+        self.collision.attach_sensor()
+
         try:
             while True:
                 self.lane.update_turn_status()
@@ -299,43 +265,42 @@ class TeamMonitor:
             pass
         finally:
             self.cleanup()
- 
+
     def cleanup(self):
         ds = self.lane.violations["illegal_double_solid_cross"]
-        s  = self.lane.violations["illegal_solid_cross"]
-        d  = self.lane.violations["unjustified_dashed_cross"]
+        s = self.lane.violations["illegal_solid_cross"]
+        d = self.lane.violations["unjustified_dashed_cross"]
         total_lane = ds + s + d
-        static = self.collision.static_count; dynamic = self.collision.dynamic_count
+        static = self.collision.static_count
+        dynamic = self.collision.dynamic_count
         total_coll = static + dynamic
         stop_v = self.redlight.violations["StopWaypointPassed"]
         trig_v = self.redlight.violations["TriggerVolume"]
         total_red = stop_v + trig_v
- 
-        # Append to team CSV
+
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(self.team_csv, "a", newline="") as f:
             w = csv.writer(f)
-            w.writerow([ds,s,d,total_lane,static,dynamic,total_coll,stop_v,trig_v,total_red,ts])
- 
-        # Update encrypted master.csv
-        # update_master_csv(self.team_name, total_coll + total_red + total_lane)
+            w.writerow([ds, s, d, total_lane, static, dynamic, total_coll, stop_v, trig_v, total_red, ts])
+
         update_master_csv(self.team_name, total_lane, total_coll, total_red)
- 
-        # Destroy sensors
-        self.lane.destroy(); self.collision.destroy()
- 
+
+        self.lane.destroy()
+        self.collision.destroy()
+
         print(f"\n=== Summary for {self.team_name} ===")
         print(f"Lane: {total_lane}  Collisions: {total_coll}  RedLight: {total_red}")
- 
+
 def main():
     team = input("Enter your team name: ").strip()
     if not team:
-        print("❗ Team name required."); return
- 
+        print("❗ Team name required.")
+        return
+
     client = carla.Client("localhost", 2000)
     client.set_timeout(10.0)
     TeamMonitor(client, team).run()
     input("Press Enter to exit...")
- 
+
 if __name__ == "__main__":
     main()
